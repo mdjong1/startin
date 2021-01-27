@@ -473,6 +473,17 @@ impl Triangulation {
         Ok(pi)
     }
 
+    pub fn insert_vertex(&mut self, px: f64, py: f64, pz: f64) {
+        self.stars.push(Star::new(px, py, pz));
+        self.cur = self.stars.len() - 1;
+    }
+
+    pub fn define_star(&mut self, center_vertex_id: usize, neighbors: Vec<usize>) {
+        for neighbor in neighbors {
+            self.stars[center_vertex_id].link.add(neighbor)
+        }
+    }
+
     fn update_dt(&mut self, pi: usize) {
         // println!("--> Update DT");
         let mut mystack: Vec<Triangle> = Vec::new();
