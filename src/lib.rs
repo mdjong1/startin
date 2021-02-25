@@ -197,9 +197,9 @@ impl Link {
 
     fn prev_index(&self, i: usize) -> usize {
         if i == 0 {
-            (self.0.len() - 1)
+            self.0.len() - 1
         } else {
-            (i - 1)
+            i - 1
         }
     }
 
@@ -712,7 +712,7 @@ impl Triangulation {
     /// Returns number of finite vertices in the triangulation.
     pub fn number_of_vertices(&self) -> usize {
         //-- number of finite vertices
-        (self.stars.len() - 1 - self.removed_indices.len())
+        self.stars.len() - 1 - self.removed_indices.len()
     }
 
     /// Returns number of finite triangles in the triangulation.
@@ -878,8 +878,8 @@ impl Triangulation {
                 tr.v[2] = tmp;
             } else {
                 let tmp: usize = tr.v[1];
-                tr.v[0] = tr.v[2];
                 tr.v[1] = tr.v[0];
+                tr.v[0] = tr.v[2];
                 tr.v[2] = tmp;
             }
         }
