@@ -11,7 +11,15 @@ keywords = ["delaunay", "triangulation", "terrain", "gis"]
 readme = "README.md"
 
 [dependencies]
-rand = "0.6"
+hashbrown = "0.6.1"
+rand = "0.7.2"
+log = "0.4.8"
+env_logger = "0.7.1"
+geojson= "*"
+serde_json= "*"
+las = { version = "0.7", features = ["laz"] }
+num-format = "0.4.0"
+clap = "3.0.0-beta.1"
 
 [dev-dependencies]
 csv = "1"
