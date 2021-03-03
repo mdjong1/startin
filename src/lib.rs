@@ -214,9 +214,9 @@ impl Link {
         return self.0.iter().position(|&x| x == v);
     }
 
-    fn has_index(&self, v: usize) -> bool {
-        return self.0.iter().any(|&x| x == v);
-    }
+    // fn has_index(&self, v: usize) -> bool {
+    //     return self.0.iter().any(|&x| x == v);
+    // }
 
     fn get_next_vertex(&self, v: usize) -> Option<usize> {
         let re = self.get_index(v);
@@ -632,7 +632,6 @@ impl Triangulation {
         self.stars.remove(&v);
         println!("Actually removed vertex {}", v);
         // self.removed_indices.push(v);
-        self.removed_indices.push(v);
         if ns[0] != 0 {
             self.cur = ns[0];
         } else if ns[1] != 0 {
@@ -989,7 +988,7 @@ impl Triangulation {
         loop {
             // println!("Walk Safe loop: {}", tr);
             // Either current triangle is infinite; or one of the triangle we would want to walk to doesn't exist (yet)
-            if tr.is_infinite()
+            if tr.is_infinite() {
                 break;
             }
             let a = &self.stars.get(&tr.v[0]);
@@ -1163,7 +1162,6 @@ impl Triangulation {
     }
 
     fn get_opposite_vertex(&self, tr: &Triangle) -> usize {
-        self.stars[tr.v[2]].link.get_next_vertex(tr.v[1]).unwrap()
         self.stars[&tr.v[2]].link.get_next_vertex(tr.v[1]).unwrap()
     }
 
@@ -1175,7 +1173,7 @@ impl Triangulation {
         //     pts.push(star.1.pt.to_vec());
         // }
 
-        let keys = self.stars.keys().collect();
+        let mut keys: Vec<&usize> = self.stars.keys().collect();
         keys.sort();
 
         for key in keys {
@@ -1187,7 +1185,7 @@ impl Triangulation {
     pub fn all_vertex_ids(&self) -> Vec<usize> {
         let mut ids: Vec<usize> = Vec::with_capacity(self.stars.len() - 1);
 
-        let keys = self.stars.keys().collect();
+        let mut keys: Vec<&usize> = self.stars.keys().collect();
         keys.sort();
 
         for key in keys {
