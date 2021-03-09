@@ -5,7 +5,7 @@
 //! are used (activated by default by startin), but also possible to rely on floating-point
 //! arithmetic (not recommended).
 
-mod exactpred;
+extern crate robust;
 
 pub fn det3x3t(a: &[f64], b: &[f64], c: &[f64]) -> f64 {
     ((a[0] - c[0]) * (b[1] - c[1])) - ((a[1] - c[1]) * (b[0] - c[0]))
@@ -57,11 +57,14 @@ pub fn orient2d_robust(a: &[f64], b: &[f64], c: &[f64]) -> i8 {
     //-- CCW    = +1
     //-- CW     = -1
     //-- colinear = 0
-    // let re = unsafe { shewchuk::orient2d(a.as_ptr(), b.as_ptr(), c.as_ptr()) };
-    let re = exactpred::orient2d(a, b, c);
-    if re == 0.0 {
+    let re = robust::orient2d(
+        robust::Coord { x: a[0], y: a[1] },
+        robust::Coord { x: b[0], y: b[1] },
+        robust::Coord { x: c[0], y: c[1] },
+    );
+    if re == 0.0_f64 {
         return 0;
-    } else if re > 0.0 {
+    } else if re.is_sign_positive() {
         return 1;
     } else {
         return -1;
@@ -94,19 +97,24 @@ pub fn incircle(a: &[f64], b: &[f64], c: &[f64], p: &[f64], robust_predicates: b
 }
 
 pub fn incircle_robust(a: &[f64], b: &[f64], c: &[f64], p: &[f64]) -> i8 {
-    //-- CCW    = +1
-    //-- CW     = -1
-    //-- colinear = 0
-    // let re = unsafe { shewchuk::incircle(a.as_ptr(), b.as_ptr(), c.as_ptr(), p.as_ptr()) };
-    let re = exactpred::incircle(a, b, c, p);
-    if re == 0.0 {
+    //-- p is INSIDE   == +1
+    //-- p is OUTSIDE  == -1
+    //-- p is ONCIRCLE == 0
+    let re = robust::incircle(
+        robust::Coord { x: a[0], y: a[1] },
+        robust::Coord { x: b[0], y: b[1] },
+        robust::Coord { x: c[0], y: c[1] },
+        robust::Coord { x: p[0], y: p[1] },
+    );
+    if re == 0.0_f64 {
         return 0;
-    } else if re > 0.0 {
+    } else if re.is_sign_positive() {
         return 1;
     } else {
         return -1;
     }
 }
+
 pub fn incircle_fast(a: &[f64], b: &[f64], c: &[f64], p: &[f64]) -> i8 {
     //-- p is INSIDE   == +1
     //-- p is OUTSIDE  == -1

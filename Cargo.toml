@@ -20,6 +20,7 @@ serde_json= "*"
 las = { version = "0.7", features = ["laz"] }
 num-format = "0.4.0"
 clap = "3.0.0-beta.1"
+robust = "0.2"
 
 [dev-dependencies]
 csv = "1"
@@ -27,6 +28,9 @@ serde = "1.0"
 serde_derive = "1.0"
 las = { version = "0.7", features = ["laz"] }
 
-[[example]]
-name = "example1"
+[features]
+c_api = []
 
+[lib]
+name = "startin"
+crate-type = ["lib", "cdylib"]
