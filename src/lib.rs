@@ -96,6 +96,10 @@ use rand::Rng;
 use std::fmt;
 use std::fs::File;
 use std::io::Write;
+use std::io::{self};
+
+use geojson::{Feature, FeatureCollection, Geometry, Value};
+use serde_json::{to_value, Map};
 
 use hashbrown::HashMap;
 
@@ -218,9 +222,9 @@ impl Link {
         return self.0.iter().position(|&x| x == v);
     }
 
-    // fn has_index(&self, v: usize) -> bool {
-    //     return self.0.iter().any(|&x| x == v);
-    // }
+    fn has_index(&self, v: usize) -> bool {
+        return self.0.iter().any(|&x| x == v);
+    }
 
     fn get_next_vertex(&self, v: usize) -> Option<usize> {
         let re = self.get_index(v);
@@ -274,7 +278,7 @@ impl std::ops::Index<usize> for Link {
 impl fmt::Display for Link {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         // fmt.write_str("pt: {}\n", self.pt)?;
-        fmt.write_str(&format!("link: {:?}\n", self.0))?;
+        fmt.write_str(&format!("link: {:?}", self.0))?;
         Ok(())
     }
 }
@@ -285,6 +289,8 @@ impl fmt::Display for Link {
 struct Star {
     pub pt: [f64; 3],
     pub link: Link,
+    pub written: bool,
+    pub local_id: usize,
 }
 
 impl Star {
@@ -293,6 +299,8 @@ impl Star {
         Star {
             pt: [x, y, z],
             link: l,
+            written: true,
+            local_id: 0,
         }
     }
     // pub fn is_deleted(&self) -> bool {
@@ -310,6 +318,7 @@ pub struct Triangulation {
     jump_and_walk: bool,
     robust_predicates: bool,
     theid: usize,
+    global_id: usize,
 }
 
 impl Triangulation {
@@ -328,6 +337,7 @@ impl Triangulation {
             jump_and_walk: false,
             robust_predicates: true,
             theid: 1,
+            global_id: 1,
         }
     }
 
@@ -453,15 +463,29 @@ impl Triangulation {
     }
 
     //-- insert_one_pt
-    pub fn insert_one_pt(&mut self, px: f64, py: f64, pz: f64, vertex_id: usize) -> Result<usize, usize> {
+    pub fn insert_one_pt(
+        &mut self,
+        px: f64,
+        py: f64,
+        pz: f64,
+        vertex_id: usize,
+    ) -> Result<usize, usize> {
         // println!("-->{}", p);
-        if self.is_init == false {
+        if !self.is_init {
             return self.insert_one_pt_init_phase(px, py, pz);
         }
         //-- walk
         let p: [f64; 3] = [px, py, pz];
         let tr = self.walk(&p);
+
         // println!("STARTING TR: {}", tr);
+        // println!(
+        //     "{:?} \n {:?} \n {:?}",
+        //     self.stars[&tr.v[0]].pt.to_vec(),
+        //     self.stars[&tr.v[1]].pt.to_vec(),
+        //     self.stars[&tr.v[2]].pt.to_vec()
+        // );
+
         if geom::distance2d_squared(&self.stars[&tr.v[0]].pt, &p) <= (self.snaptol * self.snaptol) {
             return Err(tr.v[0]);
         }
@@ -483,10 +507,13 @@ impl Triangulation {
             self.stars.insert(self.theid, Star::new(px, py, pz));
             self.theid += 1;
         }
+
         //-- flip13()
         self.flip13(pi, &tr);
+
         //-- update_dt()
         self.update_dt(pi);
+
         self.cur = pi;
         Ok(pi)
     }
@@ -494,14 +521,29 @@ impl Triangulation {
     pub fn insert_vertex(&mut self, vertex_id: usize, px: f64, py: f64, pz: f64) {
         self.stars.insert(vertex_id, Star::new(px, py, pz));
         // self.stars.push(Star::new(px, py, pz));
-        self.cur = self.stars.len() - 1;
-        self.theid += 1;
+        // self.cur = self.stars.len() - 1;
+        self.theid = vertex_id;
     }
 
     pub fn define_star(&mut self, center_vertex_id: usize, neighbors: Vec<usize>) {
+        // // Clear the link so the neighbors are ensured in the right order
+        // self.stars.get_mut(&center_vertex_id).unwrap().link.clear();
+
         for neighbor in neighbors {
-            self.stars.get_mut(&center_vertex_id).unwrap().link.add(neighbor);
+            self.stars
+                .get_mut(&center_vertex_id)
+                .unwrap()
+                .link
+                .add(neighbor);
+
+            // // Add this vertex to the neighbors too
+            // // !! Might be in wrong order !!
+            // if !self.stars[&neighbor].link.has_index(center_vertex_id) {
+            //     self.stars.get_mut(&neighbor).unwrap().link.add(center_vertex_id);
+            // }
         }
+
+        self.cur = center_vertex_id;
     }
 
     pub fn set_is_init(&mut self, is_init: bool) {
@@ -527,6 +569,7 @@ impl Triangulation {
                 None => break,
                 Some(x) => x,
             };
+            // println!("tr: {}", tr);
             let opposite = self.get_opposite_vertex(&tr);
             //-- TODO: danger danger
             if !self.stars.contains_key(&opposite) {
@@ -535,7 +578,7 @@ impl Triangulation {
             //----------------------
             // println!("stacked: {} {}", tr, opposite);
 
-            if tr.is_infinite() == true {
+            if tr.is_infinite() {
                 let mut a: i8 = 0;
                 if tr.v[0] == 0 {
                     a = geom::orient2d(
@@ -567,35 +610,33 @@ impl Triangulation {
                     mystack.push(ret1);
                 }
             } else {
-                if opposite == 0 {
-                    //- if insertion on CH then break the edge, otherwise do nothing
-                    //-- TODO sure the flips are okay here?
-                    if geom::orient2d(
+                //- if insertion on CH then break the edge, otherwise do nothing
+                //-- TODO sure the flips are okay here?
+                if opposite == 0
+                    && geom::orient2d(
                         &self.stars[&tr.v[0]].pt,
                         &self.stars[&tr.v[1]].pt,
                         &self.stars[&tr.v[2]].pt,
                         self.robust_predicates,
                     ) == 0
-                    {
-                        // println!("FLIPPED1 {} {}", tr, 0);
-                        let (ret0, ret1) = self.flip22(&tr, 0);
-                        mystack.push(ret0);
-                        mystack.push(ret1);
-                    }
-                } else {
-                    if geom::incircle(
-                        &self.stars[&tr.v[0]].pt,
-                        &self.stars[&tr.v[1]].pt,
-                        &self.stars[&tr.v[2]].pt,
-                        &self.stars[&opposite].pt,
-                        self.robust_predicates,
-                    ) > 0
-                    {
-                        // println!("FLIPPED2 {} {}", tr, opposite);
-                        let (ret0, ret1) = self.flip22(&tr, opposite);
-                        mystack.push(ret0);
-                        mystack.push(ret1);
-                    }
+                {
+                    // println!("FLIPPED1 {} {}", tr, 0);
+                    let (ret0, ret1) = self.flip22(&tr, 0);
+
+                    mystack.push(ret0);
+                    mystack.push(ret1);
+                } else if geom::incircle(
+                    &self.stars[&tr.v[0]].pt,
+                    &self.stars[&tr.v[1]].pt,
+                    &self.stars[&tr.v[2]].pt,
+                    &self.stars[&opposite].pt,
+                    self.robust_predicates,
+                ) > 0
+                {
+                    // println!("FLIPPED2 {} {}", tr, opposite);
+                    let (ret0, ret1) = self.flip22(&tr, opposite);
+                    mystack.push(ret0);
+                    mystack.push(ret1);
                 }
             }
         }
@@ -636,20 +677,22 @@ impl Triangulation {
         }
         self.stars.get_mut(&v).unwrap().link.clear();
         self.stars.remove(&v);
-        println!("Actually removed vertex {}", v);
         // self.removed_indices.push(v);
-        if ns[0] != 0 {
+        // println!("ns length = {}", ns.len());
+        // Set self.cur to star we know is finalized
+        if ns.len() == 0 {
+        } else if ns[0] != 0 && !self.stars[&ns[0]].link.is_empty() {
             self.cur = ns[0];
-        } else if ns[1] != 0 {
+        } else if ns[1] != 0 && !self.stars[&ns[1]].link.is_empty() {
             self.cur = ns[1];
-        } else if ns[2] != 0 {
+        } else if ns[2] != 0 && !self.stars[&ns[2]].link.is_empty() {
             self.cur = ns[2];
         }
     }
 
     /// Returns the coordinates of the vertex v in a Vec [x,y,z]
     pub fn get_point(&self, v: usize) -> Option<Vec<f64>> {
-        if self.vertex_exists(v) == false {
+        if !self.vertex_exists(v) {
             None
         } else {
             Some(self.stars[&v].pt.to_vec())
@@ -757,6 +800,34 @@ impl Triangulation {
         self.stars.len() - 1
     }
 
+    pub fn cleanup_complete_stars(&mut self) {
+        let mut to_remove: Vec<usize> = Vec::new();
+
+        for vertex_id in self.all_vertex_ids() {
+            if !self.stars[&vertex_id].written
+                || self.stars[&vertex_id].local_id == 0
+                || !self.is_star_loaded(vertex_id)
+            {
+                continue;
+            }
+
+            // If one of the neighbors isn't written, we can't remove this vertex yet
+            // as we might need this vertex in the process of a walk later on
+            for neighbor in self.stars[&vertex_id].link.iter() {
+                if !self.vertex_exists(*neighbor) || !self.stars[&neighbor].written {
+                    continue;
+                }
+            }
+
+            to_remove.push(vertex_id);
+        }
+
+        // println!("Removed {} vertices in cleanup!", to_remove.len());
+
+        for vertex in to_remove {
+            self.stars.remove(&vertex);
+        }
+    }
 
     /// Returns number of finite triangles in the triangulation.
     pub fn number_of_triangles(&self) -> usize {
@@ -787,6 +858,14 @@ impl Triangulation {
         !self.vertex_exists(v)
     }
 
+    pub fn can_vertex_be_removed(&self, v: usize) -> bool {
+        // Vertex exists, is not on the convex hull, and is also not the infinite vertex
+        if !self.vertex_exists(v) || self.is_vertex_convex_hull(v) || v == 0 {
+            return false;
+        }
+        true
+    }
+
     /// Returns the convex hull of the dataset, oriented CCW.
     /// It is a list of vertex indices (first != last)
     pub fn convex_hull(&self) -> Vec<usize> {
@@ -807,16 +886,30 @@ impl Triangulation {
         return self.stars[&0].link.len();
     }
 
+    pub fn is_star_loaded(&self, v: usize) -> bool {
+        let mut is_loaded: bool = true;
+        for neighboring_vertex in self.stars[&v].link.iter() {
+            if !self.vertex_exists(*neighboring_vertex)
+                || self.stars[&neighboring_vertex].link.is_empty()
+            {
+                is_loaded = false;
+                break;
+            }
+        }
+        is_loaded
+    }
+
     /// Returns true if the vertex v is part of the boundary of the convex
     /// hull of the dataset. False otherwise.
     pub fn is_vertex_convex_hull(&self, v: usize) -> bool {
-        if v == 0 {
-            return false;
+        // If the star isn't entirely loaded, it's technically on the CH
+        if self.stars[&v].link.contains_infinite_vertex()
+            || self.stars[&v].link.is_empty()
+            || !self.is_star_loaded(v)
+        {
+            return true;
         }
-        if !self.vertex_exists(v) {
-            return false;
-        }
-        self.stars[&v].link.contains_infinite_vertex()
+        return false;
     }
 
     /// Returns, if it exists, the Triangle containing (px,py).
@@ -862,10 +955,9 @@ impl Triangulation {
 
     fn walk(&self, x: &[f64]) -> Triangle {
         //-- find a starting tr
-        let cur = self.cur;
 
         //-- 1. try walk from latest
-        let re = self.walk_safe(x, cur);
+        let re = self.walk_safe(x, self.cur);
         if re.is_some() {
             return re.unwrap();
         }
@@ -920,8 +1012,7 @@ impl Triangulation {
     }
 
     fn walk_safe(&self, x: &[f64], cur: usize) -> Option<Triangle> {
-
-        // println!("{}", cur);
+        // println!("cur: {}, {:?}, {}", cur, self.stars[&cur].pt.to_vec(), self.stars[&cur].link);
 
         let mut tr = Triangle { v: [0, 0, 0] };
         let re = &self.stars.get(&cur);
@@ -947,18 +1038,25 @@ impl Triangulation {
         tr.v[0] = cur;
         let l = &re.unwrap().link;
         let mut b = false;
+
         for i in 0..(l.len() - 1) {
-            if (l[i] != 0)
-                && (l[i + 1] != 0)
-            {
+            if l[i] != 0 && l[i + 1] != 0 {
                 tr.v[1] = l[i];
                 tr.v[2] = l[i + 1];
                 b = true;
                 break;
             }
         }
-        if b == false {
+
+        if !b {
             info!("Cannot find a starting finite triangle.");
+            return None;
+        }
+
+        if !self.vertex_exists(tr.v[0])
+            || !self.vertex_exists(tr.v[1])
+            || !self.vertex_exists(tr.v[2])
+        {
             return None;
         }
 
@@ -993,20 +1091,18 @@ impl Triangulation {
         //-- we know that tr0-tr1-x is CCW
         loop {
             // println!("Walk Safe loop: {}", tr);
-            // Either current triangle is infinite; or one of the triangle we would want to walk to doesn't exist (yet)
+            // Either current triangle is infinite; or one of the triangles we would want to walk to doesn't exist (yet)
             if tr.is_infinite() {
                 break;
             }
-            let a = &self.stars.get(&tr.v[0]);
-            if a.is_none() {
+
+            if !self.vertex_exists(tr.v[0]) || self.stars[&tr.v[0]].link.is_empty() {
                 return None;
             }
-            let b = &self.stars.get(&tr.v[1]);
-            if b.is_none() {
+            if !self.vertex_exists(tr.v[1]) || self.stars[&tr.v[1]].link.is_empty() {
                 return None;
             }
-            let c = &self.stars.get(&tr.v[2]);
-            if c.is_none() {
+            if !self.vertex_exists(tr.v[2]) || self.stars[&tr.v[2]].link.is_empty() {
                 return None;
             }
             if geom::orient2d(
@@ -1026,7 +1122,6 @@ impl Triangulation {
                     break;
                 } else {
                     //-- walk to incident to tr1,tr2
-                    // println!("here");
                     let prev = self
                         .stars
                         .get(&tr.v[2])
@@ -1059,7 +1154,7 @@ impl Triangulation {
         let mut dmin: f64 = std::f64::MAX;
         let mut vmin: usize = 0;
         for i in self.stars.keys() {
-            if (*i != 0) && (self.is_vertex_convex_hull(*i)) {
+            if *i != 0 && self.is_vertex_convex_hull(*i) {
                 let d = geom::distance2d_squared(x, &self.stars.get(i).unwrap().pt);
                 if d < dmin {
                     dmin = d;
@@ -1072,7 +1167,7 @@ impl Triangulation {
         let mut tr = Triangle { v: [0, 0, 0] };
         let l = &self.stars.get(&vmin).unwrap().link;
 
-        println!("vmin: {} - {}", &vmin, l);
+        // println!("vmin: {} - {}, {:?}", &vmin, l, self.stars[&vmin].pt.to_vec());
 
         let mut v2: usize = l.get_prev_vertex(0).unwrap();
         if geom::orient2d(
@@ -1098,21 +1193,22 @@ impl Triangulation {
     fn walk_bruteforce_triangles(&self, x: &[f64]) -> Option<Triangle> {
         for (i, star) in &self.stars {
             for (j, value) in star.link.iter().enumerate() {
-                if (i < value) && (self.stars.contains_key(&value) == true) {
+                if i < value && self.vertex_exists(*value) {
                     let k = star.link[star.link.next_index(j)];
-                    if (i < &k) && (self.stars.contains_key(&k) == true) {
+
+                    if i < &k && self.vertex_exists(k) {
                         let tr = Triangle { v: [*i, *value, k] };
-                        if tr.is_infinite() == false {
-                            if geom::intriangle(
+
+                        if !tr.is_infinite()
+                            && geom::intriangle(
                                 &self.stars.get(&tr.v[0]).unwrap().pt,
                                 &self.stars.get(&tr.v[1]).unwrap().pt,
                                 &self.stars.get(&tr.v[2]).unwrap().pt,
                                 &x,
                                 self.robust_predicates,
                             ) == 1
-                            {
-                                return Some(tr);
-                            }
+                        {
+                            return Some(tr);
                         }
                     }
                 }
@@ -1168,6 +1264,11 @@ impl Triangulation {
     }
 
     fn get_opposite_vertex(&self, tr: &Triangle) -> usize {
+        if self.stars[&tr.v[2]].link.is_empty()
+            || self.stars[&tr.v[2]].link.get_next_vertex(tr.v[1]) == None
+        {
+            return usize::MAX;
+        }
         self.stars[&tr.v[2]].link.get_next_vertex(tr.v[1]).unwrap()
     }
 
@@ -1175,17 +1276,89 @@ impl Triangulation {
     pub fn all_vertices(&self) -> Vec<Vec<f64>> {
         let mut pts: Vec<Vec<f64>> = Vec::with_capacity(self.stars.len() - 1);
 
-        // for star in self.stars.iter() {
-        //     pts.push(star.1.pt.to_vec());
-        // }
-
-        let mut keys: Vec<&usize> = self.stars.keys().collect();
-        keys.sort();
-
-        for key in keys {
-            pts.push(self.stars.get(key).unwrap().pt.to_vec());
+        for key in self.get_star_keys_sorted() {
+            pts.push(self.stars.get(&key).unwrap().pt.to_vec());
         }
         pts
+    }
+
+    pub fn get_star_keys_sorted(&self) -> Vec<usize> {
+        let mut keys: Vec<usize> = self.stars.keys().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    pub fn write_stars_obj(&mut self, finalize: bool) {
+
+        for key in self.get_star_keys_sorted() {
+
+            if !self.stars[&key].written
+                && (self.can_vertex_be_removed(key)
+                || (finalize && self.vertex_exists(key) && !self.stars[&key].link.is_empty()))
+            {
+                let mut current_star = self.stars.get_mut(&key).unwrap();
+
+                if current_star.local_id == 0 {
+                    // Local_id not set yet
+                    current_star.local_id = self.global_id;
+                    self.global_id += 1;
+                }
+
+                io::stdout().write_all(
+                    &format!("v {} {} {}\n", current_star.pt[0], current_star.pt[1], current_star.pt[2]).as_bytes(),
+                ).expect("");
+
+                current_star.written = true;
+            }
+        }
+
+        let mut to_remove: Vec<usize> = Vec::new();
+
+        for key in self.get_star_keys_sorted() {
+            if self.stars[&key].written {
+
+                for neighbor in self.stars[&key].link.iter() {
+                    // Neighbor not completed yet, so don't delete me yet pls
+                    if !self.vertex_exists(*neighbor) || !self.stars[&neighbor].written {
+                        continue;
+                    }
+                }
+
+                let mut can_be_removed: bool = false;
+
+                //-- reconstruct triangles
+                for (j, value) in self.stars[&key].link.iter().enumerate() {
+                    if key < *value {
+                        let k = self.stars[&key].link[self.stars[&key].link.next_index(j)];
+
+                        if key < k && self.vertex_exists(*value) && self.vertex_exists(k) {
+
+                            let triangle = Triangle {
+                                v: [
+                                    self.stars[&key].local_id,
+                                    self.stars[value].local_id,
+                                    self.stars[&k].local_id,
+                                ],
+                            };
+
+                            if !triangle.is_infinite() {
+                                io::stdout().write_all(
+                                    &format!("f {} {} {}\n", triangle.v[0], triangle.v[1], triangle.v[2]).as_bytes(),
+                                ).expect("");
+                                can_be_removed = true;
+                            }
+                        }
+                    }
+                }
+                if can_be_removed {
+                    to_remove.push(key);
+                }
+            }
+        }
+
+        for vertex in to_remove {
+            self.stars.remove(&vertex);
+        }
     }
 
     pub fn all_vertex_ids(&self) -> Vec<usize> {
@@ -1198,7 +1371,20 @@ impl Triangulation {
             ids.push(*key);
         }
 
-        return ids;
+        ids
+    }
+
+    pub fn all_vertex_ids_written(&self, written: bool) -> Vec<usize> {
+        let mut ids: Vec<usize> = Vec::with_capacity(self.stars.len() - 1);
+
+        for key in self.get_star_keys_sorted() {
+            // println!("{} can be removed: {}, and is written: {}", key, self.can_vertex_be_removed(key), self.stars[&key].written);
+            if self.stars[&key].written == written && self.can_vertex_be_removed(key) {
+                ids.push(key);
+            }
+        }
+
+        ids
     }
 
     /// Returns a <Vec<usize> of all the finite edges (implicitly grouped by 2)
@@ -1214,6 +1400,53 @@ impl Triangulation {
         }
         edges
     }
+
+    // pub fn all_unwritten_triangles(&mut self) -> Vec<Triangle> {
+    //     let mut triangles: Vec<Triangle> = Vec::new();
+    //
+    //     // Get the id's of all unwritten stars
+    //     for key in self.get_star_keys_sorted() {
+    //         let mut is_written = false;
+    //
+    //         {
+    //             let star = self.stars.get(&key).unwrap();
+    //
+    //             if star.to_write == false {
+    //                 continue;
+    //             }
+    //
+    //             //-- reconstruct triangles
+    //             for (j, value) in star.link.iter().enumerate() {
+    //                 if key < *value {
+    //                     let k = star.link[star.link.next_index(j)];
+    //
+    //                     if key < k && self.vertex_exists(*value) && self.vertex_exists(k) {
+    //                         let triangle = Triangle {
+    //                             v: [
+    //                                 star.local_id,
+    //                                 self.stars[value].local_id,
+    //                                 self.stars[&k].local_id,
+    //                             ],
+    //                         };
+    //
+    //                         if !triangle.is_infinite() {
+    //                             triangles.push(triangle);
+    //                             is_written = true;
+    //                         }
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //         if is_written {
+    //             {
+    //                 // Shorten lifetime of mutable self.stars
+    //                 let mut star = self.stars.get_mut(&key).unwrap();
+    //                 star.written = is_written;
+    //             }
+    //         }
+    //     }
+    //     triangles
+    // }
 
     /// Returns a <Vec<Triangle> of all the finite triangles (including the infinite one)
     pub fn all_triangles(&self) -> Vec<Triangle> {
@@ -1240,11 +1473,11 @@ impl Triangulation {
     /// Validates the Delaunay triangulation:
     /// (1) checks each triangle against each vertex (circumcircle tests); very slow
     /// (2) checks whether the convex hull is really convex
-    pub fn is_valid(&self) -> bool {
+    pub fn is_valid(&mut self) -> bool {
         self.is_valid_ch_convex() && self.is_valid_circumcircle()
     }
 
-    fn is_valid_circumcircle(&self) -> bool {
+    fn is_valid_circumcircle(&mut self) -> bool {
         let mut re = true;
         let trs = self.all_triangles();
         for tr in trs.iter() {
@@ -1374,21 +1607,30 @@ impl Triangulation {
             //-- to delete the vertex v and its incident edges
             // println!("FLIP-FOR-CH");
             self.stars.get_mut(&adjs[1]).unwrap().link.delete(v);
-            self.stars.get_mut(&adjs.last().unwrap()).unwrap().link.delete(v);
+            self.stars
+                .get_mut(&adjs.last().unwrap())
+                .unwrap()
+                .link
+                .delete(v);
             for i in 2..(adjs.len() - 1) {
                 self.stars.get_mut(&adjs[i]).unwrap().link.replace(v, 0);
                 self.stars.get_mut(&adjs[i]).unwrap().link.infinite_first();
             }
             let mut prev = v;
             for i in 2..(adjs.len() - 1) {
-                self.stars.get_mut(&0).unwrap().link.insert_after_v(adjs[i], prev);
+                self.stars
+                    .get_mut(&0)
+                    .unwrap()
+                    .link
+                    .insert_after_v(adjs[i], prev);
                 prev = adjs[i];
             }
             self.stars.get_mut(&adjs[0]).unwrap().link.delete(v);
             self.stars.get_mut(&v).unwrap().link.clear();
-            self.stars.get_mut(&v).unwrap().pt[0] = -999.9;
-            self.stars.get_mut(&v).unwrap().pt[1] = -999.9;
-            self.stars.get_mut(&v).unwrap().pt[2] = -999.9;
+            self.stars.remove(&v);
+            // self.stars.get_mut(&v).unwrap().pt[0] = -999.9;
+            // self.stars.get_mut(&v).unwrap().pt[1] = -999.9;
+            // self.stars.get_mut(&v).unwrap().pt[2] = -999.9;
             // self.removed_indices.push(v);
 
             for i in 0..1000 {
@@ -1428,35 +1670,38 @@ impl Triangulation {
         // println!("adjs: {:?}", adjs);
         let mut cur: usize = 0;
 
-        let max_loops: usize = adjs.len() * 10;
+        let mut count: usize = 0;
 
         while adjs.len() > 3 {
-
-            // Been looking for an answer for a while, just going to chop off the last bits and continue...
-            if cur > max_loops {
-                for i in (2..adjs.len() - 1).rev() {
-                    adjs.remove(i);
-                }
-            }
-
             let a = cur % adjs.len();
             let b = (cur + 1) % adjs.len();
             let c = (cur + 2) % adjs.len();
+
+            if count > 100 {
+                // println!("Hit failure, exiting");
+                // println!("Writing to GeoJSON!");
+                self.write_geojson_triangles("data\\loop_failure_triangles.json".to_string())
+                    .expect("Failure when writing to GeoJSON!");
+                // std::process::exit(0x0100);
+                // Found a vertex we actually can't remove?
+                return Ok(self.stars.len() - 1);
+            }
+
             // println!("cur ear--> {:?} {}/{}/{}", adjs, a, b, c);
 
             if geom::orient2d(
                 &self.stars[&adjs[a]].pt,
                 &self.stars[&adjs[b]].pt,
                 &self.stars[&adjs[c]].pt,
-                self.robust_predicates
+                self.robust_predicates,
             ) == 1
                 && geom::orient2d(
-                &self.stars[&adjs[a]].pt,
-                &self.stars[&adjs[c]].pt,
-                &self.stars[&v].pt,
-                self.robust_predicates
-            ) >= 0 {
-
+                    &self.stars[&adjs[a]].pt,
+                    &self.stars[&adjs[c]].pt,
+                    &self.stars[&v].pt,
+                    self.robust_predicates,
+                ) >= 0
+            {
                 // println!("ear {}-{}-{}", adjs[a], adjs[b], adjs[c]);
                 //-- test incircle with all other vertices in the "hole"
                 let cur2 = cur + 3;
@@ -1465,14 +1710,22 @@ impl Triangulation {
                 for i in 0..adjs.len() - 3 {
                     // println!("test ear with {}", adjs[(cur2 + i) % adjs.len()]);
 
+                    // println!("Incircle: {}", geom::incircle(
+                    //     &self.stars[&adjs[a]].pt,
+                    //     &self.stars[&adjs[b]].pt,
+                    //     &self.stars[&adjs[c]].pt,
+                    //     &self.stars[&adjs[(cur2 + i) % adjs.len()]].pt,
+                    //     self.robust_predicates
+                    // ));
+
                     if geom::incircle(
                         &self.stars[&adjs[a]].pt,
                         &self.stars[&adjs[b]].pt,
                         &self.stars[&adjs[c]].pt,
                         &self.stars[&adjs[(cur2 + i) % adjs.len()]].pt,
-                        self.robust_predicates
+                        self.robust_predicates,
                     ) > 0
-                    && cur < max_loops {
+                    {
                         isdel = false;
                         break;
                     }
@@ -1486,9 +1739,9 @@ impl Triangulation {
                     self.flip22(&t, adjs[c]);
                     adjs.remove((cur + 1) % adjs.len());
                 }
-
             }
-            cur += 1;
+            cur = cur + 1;
+            count += 1;
         }
         //-- flip31 to remove the vertex
         self.flip31(v);
@@ -1496,7 +1749,7 @@ impl Triangulation {
     }
 
     /// write an OBJ file to disk
-    pub fn write_obj(&self, path: String, twod: bool) -> std::io::Result<()> {
+    pub fn write_obj(&mut self, path: String, twod: bool) -> std::io::Result<()> {
         let trs = self.all_triangles();
         let mut f = File::create(path)?;
         let mut s = String::new();
@@ -1520,6 +1773,74 @@ impl Triangulation {
         }
         write!(f, "{}", s).unwrap();
         // println!("write fobj: {:.2?}", starttime.elapsed());
+        Ok(())
+    }
+
+    /// write a GeoJSON file of the triangles/vertices to disk
+    pub fn write_geojson_triangles(&self, path: String) -> std::io::Result<()> {
+        let mut fc = FeatureCollection {
+            bbox: None,
+            features: vec![],
+            foreign_members: None,
+        };
+        //-- vertices
+        for (i, star) in &self.stars {
+            if *i == 0 {
+                continue;
+            }
+            let pt = Geometry::new(Value::Point(vec![star.pt[0], star.pt[1]]));
+            let mut attributes = Map::new();
+            attributes.insert(String::from("id"), to_value(i.to_string()).unwrap());
+            attributes.insert(
+                String::from("written"),
+                serde_json::value::Value::Bool(star.written),
+            );
+            let f = Feature {
+                bbox: None,
+                geometry: Some(pt),
+                id: None,
+                properties: Some(attributes),
+                foreign_members: None,
+            };
+            fc.features.push(f);
+        }
+        //-- triangles
+        for (i, star) in &self.stars {
+            for (j, value) in star.link.iter().enumerate() {
+                if (i < value) && (self.stars.contains_key(&value) == true) {
+                    let k = star.link[star.link.next_index(j)];
+                    if (i < &k) && (self.stars.contains_key(&k) == true) {
+                        let tr = Triangle { v: [*i, *value, k] };
+                        if tr.is_infinite() == false {
+                            let mut l: Vec<Vec<Vec<f64>>> = vec![vec![Vec::with_capacity(1); 4]];
+                            l[0][0].push(self.stars[i].pt[0]);
+                            l[0][0].push(self.stars[i].pt[1]);
+                            l[0][1].push(self.stars[value].pt[0]);
+                            l[0][1].push(self.stars[value].pt[1]);
+                            l[0][2].push(self.stars[&k].pt[0]);
+                            l[0][2].push(self.stars[&k].pt[1]);
+                            l[0][3].push(self.stars[i].pt[0]);
+                            l[0][3].push(self.stars[i].pt[1]);
+                            let gtr = Geometry::new(Value::Polygon(l));
+                            // let mut attributes = Map::new();
+                            // if self.stars[]
+                            // attributes.insert(String::from("active"), to_value();
+                            let f = Feature {
+                                bbox: None,
+                                geometry: Some(gtr),
+                                id: None,
+                                properties: None, //Some(attributes),
+                                foreign_members: None,
+                            };
+                            fc.features.push(f);
+                        }
+                    }
+                }
+            }
+        }
+        //-- write the file to disk
+        let mut fo = File::create(path)?;
+        write!(fo, "{}", fc.to_string()).unwrap();
         Ok(())
     }
 
