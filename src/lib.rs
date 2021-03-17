@@ -299,7 +299,7 @@ impl Star {
         Star {
             pt: [x, y, z],
             link: l,
-            written: true,
+            written: false,
             local_id: 0,
         }
     }
@@ -1315,11 +1315,21 @@ impl Triangulation {
         let mut to_remove: Vec<usize> = Vec::new();
 
         for key in self.get_star_keys_sorted() {
-            if self.stars[&key].written {
+            if self.stars[&key].written && key != 0 {
 
-                for neighbor in self.stars[&key].link.iter() {
-                    // Neighbor not completed yet, so don't delete me yet pls
-                    if !self.vertex_exists(*neighbor) || !self.stars[&neighbor].written {
+                if !finalize {
+                    let mut neighbors_written: bool = true;
+
+                    // Check if all neighbors are marked as written
+                    for neighbor in self.stars[&key].link.iter() {
+                        if (!self.vertex_exists(*neighbor) || !self.stars[neighbor].written) && *neighbor != 0 {
+                            io::stderr().write_all(&format!("{} is not completely written due to {}\n", key, neighbor).as_bytes());
+                            neighbors_written = false;
+                            break;
+                        }
+                    }
+
+                    if !neighbors_written {
                         continue;
                     }
                 }
@@ -1328,25 +1338,26 @@ impl Triangulation {
 
                 //-- reconstruct triangles
                 for (j, value) in self.stars[&key].link.iter().enumerate() {
-                    if key < *value {
-                        let k = self.stars[&key].link[self.stars[&key].link.next_index(j)];
+                    let k = self.stars[&key].link[self.stars[&key].link.next_index(j)];
 
-                        if key < k && self.vertex_exists(*value) && self.vertex_exists(k) {
+                    if self.vertex_exists(*value) && self.vertex_exists(k) {
 
-                            let triangle = Triangle {
-                                v: [
-                                    self.stars[&key].local_id,
-                                    self.stars[value].local_id,
-                                    self.stars[&k].local_id,
-                                ],
-                            };
 
-                            if !triangle.is_infinite() {
-                                io::stdout().write_all(
-                                    &format!("f {} {} {}\n", triangle.v[0], triangle.v[1], triangle.v[2]).as_bytes(),
-                                ).expect("");
-                                can_be_removed = true;
-                            }
+                        // TODO: Don't output already outputted triangles!
+
+                        let triangle = Triangle {
+                            v: [
+                                self.stars[&key].local_id,
+                                self.stars[value].local_id,
+                                self.stars[&k].local_id,
+                            ],
+                        };
+
+                        if !triangle.is_infinite() {
+                            io::stdout().write_all(
+                                &format!("f {} {} {}\n", triangle.v[0], triangle.v[1], triangle.v[2]).as_bytes(),
+                            ).expect("");
+                            can_be_removed = true;
                         }
                     }
                 }
