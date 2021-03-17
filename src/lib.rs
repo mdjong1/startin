@@ -1323,7 +1323,6 @@ impl Triangulation {
                     // Check if all neighbors are marked as written
                     for neighbor in self.stars[&key].link.iter() {
                         if (!self.vertex_exists(*neighbor) || !self.stars[neighbor].written) && *neighbor != 0 {
-                            io::stderr().write_all(&format!("{} is not completely written due to {}\n", key, neighbor).as_bytes());
                             neighbors_written = false;
                             break;
                         }
@@ -1337,14 +1336,12 @@ impl Triangulation {
                 let mut can_be_removed: bool = false;
 
                 //-- reconstruct triangles
+                // TODO: Fix multiple outputs of same triangle! Discuss with Hugo
                 for (j, value) in self.stars[&key].link.iter().enumerate() {
+
                     let k = self.stars[&key].link[self.stars[&key].link.next_index(j)];
 
                     if self.vertex_exists(*value) && self.vertex_exists(k) {
-
-
-                        // TODO: Don't output already outputted triangles!
-
                         let triangle = Triangle {
                             v: [
                                 self.stars[&key].local_id,
@@ -1357,6 +1354,7 @@ impl Triangulation {
                             io::stdout().write_all(
                                 &format!("f {} {} {}\n", triangle.v[0], triangle.v[1], triangle.v[2]).as_bytes(),
                             ).expect("");
+
                             can_be_removed = true;
                         }
                     }
